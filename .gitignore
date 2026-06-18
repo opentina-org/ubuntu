@@ -1,0 +1,5 @@
+binary/
+out/
+ubuntu-rootfs.ext4
+ubuntu-base-*.tar.gz
+.oem-staging/

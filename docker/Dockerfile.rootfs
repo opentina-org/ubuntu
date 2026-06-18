@@ -1,0 +1,144 @@
+# syntax=docker/dockerfile:1.6
+# SPDX-License-Identifier: MIT
+# OpenTina Ubuntu lite rootfs, cross-arch build via BuildKit/QEMU.
+# Mirrors mk-base-ubuntu.sh's package set + user/group/system tweaks, but as a
+# Dockerfile so that `docker buildx build --platform linux/arm64 -o type=tar`
+# can produce a rootfs tar without ubuntu-base + chroot + qemu-user-static
+# bind mounts. The Docker Hub `ubuntu:<codename>` multi-arch image is the same
+# base as ubuntu-base tarball plus a few defaults; suitable for a lite rootfs.
+
+ARG SUITE=noble
+FROM ubuntu:${SUITE}
+
+ARG SUITE=noble
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG UBUNTU_PORTS_MIRROR=http://ports.ubuntu.com/ubuntu-ports
+ARG ROOT_PASSWORD=root
+ARG EXTRA_USER=cat
+ARG EXTRA_USER_PASSWORD=temppwd
+ARG EXTRA_DEBS=""
+ARG SERIAL_TTY=ttyS0
+ARG HOSTNAME=ubuntu-lite
+ARG TIMEZONE=Asia/Shanghai
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8
+
+# 1. Replace default mirrors. ubuntu:<codename> uses ports for non-amd64 by
+#    default, but Docker Hub's multi-arch manifest sometimes ships archive.*,
+#    so rewrite to either UBUNTU_MIRROR (amd64) or UBUNTU_PORTS_MIRROR (arm*).
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+    amd64) MIRROR="${UBUNTU_MIRROR}" ;; \
+    *)     MIRROR="${UBUNTU_PORTS_MIRROR}" ;; \
+    esac; \
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+        sed -i "s|http://[^ ]*ubuntu[^ ]*|${MIRROR}|g" \
+            /etc/apt/sources.list.d/ubuntu.sources; \
+    fi; \
+    # If we also have a /etc/apt/sources.list (older variants), rewrite it too
+    # and prefer the deb822 file as the single source of truth to avoid the
+    # apt warning "Target Packages ... is configured multiple times".
+    if [ -f /etc/apt/sources.list ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+        : > /etc/apt/sources.list; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i "s|http://[^ ]*ubuntu[^ ]*|${MIRROR}|g" /etc/apt/sources.list; \
+    fi; \
+    apt-get -y update; \
+    apt-get -y full-upgrade; \
+    apt-get -y install --no-install-recommends \
+        rsyslog sudo dialog apt-utils evtest acpid \
+        net-tools openssh-server ifupdown \
+        inetutils-ping libssl-dev tcpdump i2c-tools strace vim iperf3 \
+        ethtool toilet htop pciutils usbutils curl whiptail \
+        gnupg bc gdisk parted gpiod libgpiod-dev u-boot-tools bsdmainutils \
+        file fdisk locales ca-certificates \
+        systemd-sysv systemd-timesyncd ${EXTRA_DEBS}; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Locale, timezone, hostname, /sbin/init fallback.
+RUN set -eux; \
+    sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
+    locale-gen; \
+    update-locale LANG=en_US.UTF-8; \
+    ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime; \
+    echo "${TIMEZONE}" > /etc/timezone; \
+    echo "${HOSTNAME}" > /etc/hostname; \
+    if [ ! -e /sbin/init ] && [ ! -e /usr/sbin/init ]; then \
+        ln -sf /lib/systemd/systemd /usr/sbin/init; \
+    fi
+
+# 3. Root password + extra user with passwordless sudo + gpio group.
+RUN set -eux; \
+    echo "root:${ROOT_PASSWORD}" | chpasswd; \
+    groupadd -f --system gpio 2>/dev/null || true; \
+    if [ -n "${EXTRA_USER}" ]; then \
+        if ! id -u "${EXTRA_USER}" >/dev/null 2>&1; then \
+            useradd -G sudo -m -s /bin/bash "${EXTRA_USER}"; \
+            echo "${EXTRA_USER}:${EXTRA_USER_PASSWORD}" | chpasswd; \
+        fi; \
+        gpasswd -a "${EXTRA_USER}" gpio 2>/dev/null || true; \
+        gpasswd -a "${EXTRA_USER}" video 2>/dev/null || true; \
+        gpasswd -a "${EXTRA_USER}" audio 2>/dev/null || true; \
+        gpasswd -a "${EXTRA_USER}" i2c 2>/dev/null || true; \
+    fi; \
+    sed -i '/pam_securetty.so/s/^/# /g' /etc/pam.d/login 2>/dev/null || true; \
+    if ! awk '$1 == "%sudo" { found=1 } END { exit !found }' /etc/sudoers; then \
+        echo "%sudo	ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers; \
+    else \
+        sed -i -e '/\%sudo/ c %sudo    ALL=(ALL) NOPASSWD: ALL' /etc/sudoers; \
+    fi
+
+# 4. /etc/fstab + systemd tweaks (mask -wait-online, log level/target).
+RUN set -eux; \
+    mkdir -p /etc/systemd/system.conf.d; \
+    printf '%s\n%s\n' '[Manager]' 'DefaultTimeoutStartSec=120s' \
+        > /etc/systemd/system.conf.d/opentina.conf; \
+    cat > /etc/fstab <<'FSTAB'
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+proc            /proc           proc    defaults          0       0
+sysfs           /sys            sysfs   defaults          0       0
+tmpfs           /tmp            tmpfs   defaults,nodev,nosuid  0  0
+FSTAB
+
+RUN set -eux; \
+    for s in NetworkManager systemd-networkd; do \
+        systemctl mask "${s}-wait-online.service" 2>/dev/null || true; \
+    done; \
+    for s in 'wpa_supplicant-wired@' 'wpa_supplicant-nl80211@' 'wpa_supplicant@'; do \
+        systemctl mask "${s}" 2>/dev/null || true; \
+    done; \
+    sed -i 's/#LogLevel=info/LogLevel=warning/' /etc/systemd/system.conf 2>/dev/null || true; \
+    sed -i 's/#LogTarget=journal-or-kmsg/LogTarget=journal/' /etc/systemd/system.conf 2>/dev/null || true; \
+    systemctl set-default multi-user.target; \
+    systemctl enable ssh
+
+# 5. Project overlay (opentina-serial-getty@.service, etc).
+COPY overlay/ /
+
+# 6. Swap serial-getty@<tty> -> opentina-serial-getty@<tty> (the overlay unit).
+RUN set -eux; \
+    systemctl disable "serial-getty@${SERIAL_TTY}.service" 2>/dev/null || true; \
+    systemctl enable "opentina-serial-getty@${SERIAL_TTY}.service" 2>/dev/null || true
+
+# 7. OEM injection. Customer assets are staged into .oem-staging/ by the buildx
+#    wrapper (empty = no-op). Unmet deps abort the build; no `apt -f install`.
+COPY .oem-staging/ /oem/
+RUN set -eux; \
+    if ls /oem/packages/*.deb >/dev/null 2>&1; then \
+        apt-get -y update; \
+        apt-get -y install --no-install-recommends /oem/packages/*.deb; \
+        apt-get clean; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ -d /oem/rootfs-overlay ]; then \
+        cp -a /oem/rootfs-overlay/. /; \
+    fi; \
+    if [ -x /oem/post.sh ]; then \
+        /oem/post.sh; \
+    fi; \
+    rm -rf /oem
+
+RUN printf 'OPENTINA_REVISION=Dockerfile.rootfs\nSUITE=%s\n' "${SUITE}" \
+        > /etc/opentina-rootfs-release

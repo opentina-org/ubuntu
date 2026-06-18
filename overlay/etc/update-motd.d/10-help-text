@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# Optional links after login (shown below the welcome line from 00-header).
+
+printf "\n"
+printf " * OpenTina build:  see openaw/build README\n"
+printf " * Ubuntu rootfs:   openaw/ubuntu (sources/ubuntu)\n"
+
+if [ -e /etc/build-release ]; then
+	cat /etc/build-release
+fi
