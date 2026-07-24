@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# Login banner (MOTD). Override at build time with OPENTINA_MOTD_BANNER_FILE.
+
+[ -r /etc/lsb-release ] && . /etc/lsb-release
+
+printf "\n"
+
+if [ -r /etc/opentina-motd-banner ]; then
+	cat /etc/opentina-motd-banner
+else
+	cat <<'BANNER'
+    ____                   _______  __
+   / __ \____  ___  ____  / /  _/ |/ /
+  / / / / __ \/ _ \/ __ \/ // / |   /
+ / /_/ / /_/ /  __/ / / // // / /   |
+ \____/ .___/\___/_/ /_/___/_/ /_/|_|
+     /_/  OpenTina
+BANNER
+fi
+
+if [ -z "$DISTRIB_DESCRIPTION" ] && [ -x /usr/bin/lsb_release ]; then
+	DISTRIB_DESCRIPTION=$(lsb_release -s -d)
+fi
+printf "\nWelcome to %s (%s %s %s)\n\n" "$DISTRIB_DESCRIPTION" "$(uname -o)" "$(uname -r)" "$(uname -m)"

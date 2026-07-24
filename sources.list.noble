@@ -1,0 +1,10 @@
+deb http://mirrors.ustc.edu.cn/ubuntu-ports/ noble main multiverse restricted universe
+deb http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-backports main multiverse restricted universe
+deb http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-proposed main multiverse restricted universe
+deb http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-security main multiverse restricted universe
+deb http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-updates main multiverse restricted universe
+deb-src http://mirrors.ustc.edu.cn/ubuntu-ports/ noble main multiverse restricted universe
+deb-src http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-backports main multiverse restricted universe
+deb-src http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-proposed main multiverse restricted universe
+deb-src http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-security main multiverse restricted universe
+deb-src http://mirrors.ustc.edu.cn/ubuntu-ports/ noble-updates main multiverse restricted universe
