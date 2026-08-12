@@ -10,7 +10,6 @@ runroot() {
 }
 
 TARGET_ROOTFS_DIR=./binary
-MOUNTPOINT=./rootfs
 ROOTFSIMAGE=ubuntu-rootfs.ext4
 
 echo Making rootfs!
@@ -18,31 +17,12 @@ echo Making rootfs!
 if [ -e ${ROOTFSIMAGE} ]; then
 	runroot rm -f ${ROOTFSIMAGE}
 fi
-if [ -e ${MOUNTPOINT} ]; then
-	runroot rm -rf ${MOUNTPOINT}
-fi
 
-runroot mkdir -p ${MOUNTPOINT}
 dd if=/dev/zero of=${ROOTFSIMAGE} bs=1M count=0 seek=6000
 
-finish() {
-	runroot umount ${MOUNTPOINT} || true
-	echo -e "[ MAKE ROOTFS FAILED. ]"
-	exit -1
-}
-
-echo Format rootfs to ext4
-runroot mkfs.ext4 ${ROOTFSIMAGE}
-
-echo Mount rootfs to ${MOUNTPOINT}
-runroot mount ${ROOTFSIMAGE} ${MOUNTPOINT}
-trap finish ERR
-
-echo Copy rootfs to ${MOUNTPOINT}
-runroot cp -rfp ${TARGET_ROOTFS_DIR}/* ${MOUNTPOINT}
-
-echo Umount rootfs
-runroot umount ${MOUNTPOINT}
+echo Format rootfs to ext4 and populate from ${TARGET_ROOTFS_DIR}
+# mkfs.ext4 -d needs no loop mount, which fails in qemu-emulated containers.
+runroot mkfs.ext4 -F -d ${TARGET_ROOTFS_DIR} ${ROOTFSIMAGE}
 
 echo Rootfs Image: ${ROOTFSIMAGE}
 
