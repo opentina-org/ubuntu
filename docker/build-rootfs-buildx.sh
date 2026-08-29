@@ -1,5 +1,4 @@
 #!/bin/bash
-# SPDX-License-Identifier: MIT
 # buildx-based Ubuntu lite rootfs. Uses BuildKit + QEMU binfmt to cross-build
 # an arm64/armhf rootfs without ubuntu-base + chroot + qemu-user-static bind
 # mounts.
@@ -16,6 +15,9 @@
 #   EXTRA_USER_PASSWORD        (default temppwd)
 #   EXTRA_DEBS="pkg1 pkg2"     extra apt packages
 #   OPENTINA_SERIAL_TTY        (default ttyS0)
+#   DESKTOP=0|1                lite (default) or desktop profile
+#   OPENTINA_UBUNTU_HOSTNAME   override profile-specific hostname
+#   OPENTINA_BUILD_TMPDIR      rootfs unpack directory (default out/.tmp)
 #   MAKE_EXT4=1                also produce .ext4
 #   ROOTFS_EXT4_MB=<int>       ext4 size in MB (default du(rootfs)+400)
 #   HOST_UID / HOST_GID        chown out/ to host user
@@ -60,21 +62,9 @@ aarch64 | arm64)
     [ "${ARCH}" != "arm64" ] && NEED_HOST_BINFMT=true ;;
 esac
 if [ "${NEED_HOST_BINFMT}" = true ] && [ "${QEMU_BINFMT_SETUP:-1}" = "1" ]; then
-    # BuildKit needs the F (fix) flag so the interpreter is available inside
-    # containers. Distro qemu-user-static often registers without it; that
-    # yields "exec /bin/sh: no such file or directory" on cross builds.
-    _binfmt_entry="/proc/sys/fs/binfmt_misc/qemu-${QEMU_ARCH}"
-    _binfmt_ok=false
-    if [ -e "${_binfmt_entry}" ] && grep -qx enabled "${_binfmt_entry}" &&
-        grep -q '^flags:.*F' "${_binfmt_entry}"; then
-        _binfmt_ok=true
-    fi
-    if [ "${_binfmt_ok}" != true ]; then
+    if ! [ -e "/proc/sys/fs/binfmt_misc/qemu-${QEMU_ARCH}" ]; then
         QEMU_BINFMT_IMAGE="${QEMU_BINFMT_IMAGE:-tonistiigi/binfmt:latest}"
-        echo "==> register qemu binfmt (with F flag) for ${ARCH} via ${QEMU_BINFMT_IMAGE}"
-        if [ -e "${_binfmt_entry}" ]; then
-            docker run --rm --privileged "${QEMU_BINFMT_IMAGE}" --uninstall "qemu-${QEMU_ARCH}" >/dev/null
-        fi
+        echo "==> register qemu binfmt for ${ARCH} via ${QEMU_BINFMT_IMAGE}"
         docker run --rm --privileged "${QEMU_BINFMT_IMAGE}" --install "${ARCH}"
     fi
 fi
@@ -83,7 +73,14 @@ TS="$(date +%Y%m%d-%H%M)"
 OUT="${UBUNTU_DIR}/out"
 mkdir -p "${OUT}"
 RAW_TAR="${OUT}/.buildx-${RELEASE}-${ARCH}-${TS}.tar"
-OUT_BASE="ubuntu-${RELEASE}-lite-${ARCH}-${TS}"
+DESKTOP="${DESKTOP:-0}"
+case "${DESKTOP}" in
+0) PROFILE_TAG="lite" ;;
+1) PROFILE_TAG="desktop" ;;
+*) echo "DESKTOP must be 0 or 1 (got: ${DESKTOP})" >&2; exit 1 ;;
+esac
+ROOTFS_HOSTNAME="${OPENTINA_UBUNTU_HOSTNAME:-ubuntu-${PROFILE_TAG}}"
+OUT_BASE="ubuntu-${RELEASE}-${PROFILE_TAG}-${ARCH}-${TS}"
 TAR_GZ="${OUT}/${OUT_BASE}.tar.gz"
 EXT4_IMG="${OUT}/${OUT_BASE}.ext4"
 
@@ -106,7 +103,7 @@ trap 'rm -rf "${OEM_STAGE}"' EXIT
 BUILDER_ARG=()
 [ -n "${BUILDX_BUILDER:-}" ] && BUILDER_ARG=(--builder "${BUILDX_BUILDER}")
 
-echo "==> buildx build --platform=${PLATFORM} -f docker/Dockerfile.rootfs (SUITE=${SUITE})"
+echo "==> buildx build --platform=${PLATFORM} -f docker/Dockerfile.rootfs (SUITE=${SUITE}, PROFILE=${PROFILE_TAG})"
 docker buildx build "${BUILDER_ARG[@]}" \
     --platform "${PLATFORM}" \
     --progress "${BUILDX_PROGRESS:-auto}" \
@@ -119,10 +116,14 @@ docker buildx build "${BUILDER_ARG[@]}" \
     --build-arg "EXTRA_USER_PASSWORD=${EXTRA_USER_PASSWORD:-temppwd}" \
     --build-arg "EXTRA_DEBS=${EXTRA_DEBS:-}" \
     --build-arg "SERIAL_TTY=${OPENTINA_SERIAL_TTY:-ttyS0}" \
+    --build-arg "HOSTNAME=${ROOTFS_HOSTNAME}" \
+    --build-arg "DESKTOP=${DESKTOP}" \
     -o "type=tar,dest=${RAW_TAR}" \
     "${UBUNTU_DIR}"
 
-WRAP_DIR="$(mktemp -d -t opentina-buildx.XXXXXX)"
+TMP_BASE="${OPENTINA_BUILD_TMPDIR:-${OUT}/.tmp}"
+mkdir -p "${TMP_BASE}"
+WRAP_DIR="$(mktemp -d -p "${TMP_BASE}" opentina-buildx.XXXXXX)"
 trap 'rm -rf "${WRAP_DIR}" "${OEM_STAGE}" "${RAW_TAR}"' EXIT
 mkdir -p "${WRAP_DIR}/rootfs"
 

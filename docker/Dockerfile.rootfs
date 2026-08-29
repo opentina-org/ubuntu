@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MIT
-# OpenTina Ubuntu lite rootfs, cross-arch build via BuildKit/QEMU.
+# syntax=docker/dockerfile:1.6
+# OpenTina Ubuntu lite rootfs — cross-arch build via BuildKit/QEMU.
 # Mirrors mk-base-ubuntu.sh's package set + user/group/system tweaks, but as a
 # Dockerfile so that `docker buildx build --platform linux/arm64 -o type=tar`
 # can produce a rootfs tar without ubuntu-base + chroot + qemu-user-static
@@ -18,14 +18,15 @@ ARG EXTRA_USER_PASSWORD=temppwd
 ARG EXTRA_DEBS=""
 ARG SERIAL_TTY=ttyS0
 ARG HOSTNAME=ubuntu-lite
+ARG DESKTOP=0
 ARG TIMEZONE=Asia/Shanghai
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8
 
 # 1. Replace default mirrors. ubuntu:<codename> uses ports for non-amd64 by
-#    default, but Docker Hub's multi-arch manifest sometimes ships archive.*,
-#    so rewrite to either UBUNTU_MIRROR (amd64) or UBUNTU_PORTS_MIRROR (arm*).
+#    default, but Docker Hub's multi-arch manifest sometimes ships archive.* —
+#    rewrite to either UBUNTU_MIRROR (amd64) or UBUNTU_PORTS_MIRROR (arm*).
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
     amd64) MIRROR="${UBUNTU_MIRROR}" ;; \
@@ -55,6 +56,31 @@ RUN set -eux; \
         systemd-sysv systemd-timesyncd ${EXTRA_DEBS}; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
+
+# 1b. Optional desktop/HMI stack (DESKTOP=1): software-rendered Wayland/Weston.
+#     Chromium from the xtradeb PPA (ubuntu's own chromium-browser is a snap shim).
+RUN set -eux; \
+    if [ "${DESKTOP}" = "1" ]; then \
+        install -d /etc/apt/keyrings; \
+        curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x5301FA4FD93244FBC6F6149982BB6851C64F6880" \
+            | gpg --dearmor -o /etc/apt/keyrings/xtradeb.gpg; \
+        echo "deb [signed-by=/etc/apt/keyrings/xtradeb.gpg] https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu ${SUITE} main" \
+            > /etc/apt/sources.list.d/xtradeb-chromium.list; \
+        apt-get -y update; \
+        apt-get -y install --no-install-recommends \
+            weston seatd xwayland \
+            libgl1-mesa-dri mesa-utils \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-libav \
+            gstreamer1.0-alsa gstreamer1.0-pulseaudio gstreamer1.0-gl \
+            pulseaudio alsa-utils \
+            chromium \
+            fonts-dejavu-core dbus-user-session; \
+        printf '%s\n' 'LIBGL_ALWAYS_SOFTWARE=1' 'GALLIUM_DRIVER=llvmpipe' \
+            >> /etc/environment; \
+        apt-get clean; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 2. Locale, timezone, hostname, /sbin/init fallback.
 RUN set -eux; \
@@ -113,16 +139,18 @@ RUN set -eux; \
     systemctl set-default multi-user.target; \
     systemctl enable ssh
 
-# 5. Project overlay (opentina-serial-getty@.service, etc).
+# 5. Project overlay (BSP files, login banner, etc).
 COPY overlay/ /
 
-# 6. Swap serial-getty@<tty> -> opentina-serial-getty@<tty> (the overlay unit).
+# 6. Enable the standard systemd serial getty. systemd-getty-generator also
+# requests this same unit for console=<tty>; using a second template would
+# start two agetty processes that race for input on the same serial port.
 RUN set -eux; \
-    systemctl disable "serial-getty@${SERIAL_TTY}.service" 2>/dev/null || true; \
-    systemctl enable "opentina-serial-getty@${SERIAL_TTY}.service" 2>/dev/null || true
+    systemctl disable "opentina-serial-getty@${SERIAL_TTY}.service" 2>/dev/null || true; \
+    systemctl enable "serial-getty@${SERIAL_TTY}.service"
 
 # 7. OEM injection. Customer assets are staged into .oem-staging/ by the buildx
-#    wrapper (empty = no-op). Unmet deps abort the build; no `apt -f install`.
+#    wrapper (empty = no-op). Unmet deps abort the build — no `apt -f install`.
 COPY .oem-staging/ /oem/
 RUN set -eux; \
     if ls /oem/packages/*.deb >/dev/null 2>&1; then \
@@ -139,5 +167,6 @@ RUN set -eux; \
     fi; \
     rm -rf /oem
 
-RUN printf 'OPENTINA_REVISION=Dockerfile.rootfs\nSUITE=%s\n' "${SUITE}" \
+RUN printf 'OPENTINA_REVISION=Dockerfile.rootfs\nSUITE=%s\nPROFILE=%s\n' \
+        "${SUITE}" "$([ "${DESKTOP}" = "1" ] && echo desktop || echo lite)" \
         > /etc/opentina-rootfs-release
