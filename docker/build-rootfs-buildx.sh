@@ -62,11 +62,12 @@ aarch64 | arm64)
     [ "${ARCH}" != "arm64" ] && NEED_HOST_BINFMT=true ;;
 esac
 if [ "${NEED_HOST_BINFMT}" = true ] && [ "${QEMU_BINFMT_SETUP:-1}" = "1" ]; then
-    if ! [ -e "/proc/sys/fs/binfmt_misc/qemu-${QEMU_ARCH}" ]; then
-        QEMU_BINFMT_IMAGE="${QEMU_BINFMT_IMAGE:-tonistiigi/binfmt:latest}"
-        echo "==> register qemu binfmt for ${ARCH} via ${QEMU_BINFMT_IMAGE}"
-        docker run --rm --privileged "${QEMU_BINFMT_IMAGE}" --install "${ARCH}"
-    fi
+    QEMU_BINFMT_IMAGE="${QEMU_BINFMT_IMAGE:-tonistiigi/binfmt:latest}"
+    echo "==> register qemu binfmt (with F flag) for ${ARCH} via ${QEMU_BINFMT_IMAGE}"
+    # Distro qemu-user-binfmt registers without F; --install then no-ops
+    # ("already registered") and cross RUN dies with exec /bin/sh: ENOENT.
+    docker run --rm --privileged "${QEMU_BINFMT_IMAGE}" --uninstall "qemu-${QEMU_ARCH}" >/dev/null || true
+    docker run --rm --privileged "${QEMU_BINFMT_IMAGE}" --install "${ARCH}"
 fi
 
 TS="$(date +%Y%m%d-%H%M)"
