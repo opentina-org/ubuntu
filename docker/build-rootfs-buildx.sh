@@ -17,6 +17,8 @@
 #   OPENTINA_SERIAL_TTY        (default ttyS0)
 #   DESKTOP=0|1                lite (default) or desktop profile
 #   OPENTINA_UBUNTU_HOSTNAME   override profile-specific hostname
+#   OPENTINA_CHROMIUM_DEB_URL   override arm64 OpenTina Chromium .deb URL ("" uses xtradeb PPA)
+#   OPENTINA_CHROMIUM_DEB_SHA256 SHA-256 required when OPENTINA_CHROMIUM_DEB_URL is non-empty
 #   OPENTINA_BUILD_TMPDIR      rootfs unpack directory (default out/.tmp)
 #   MAKE_EXT4=1                also produce .ext4
 #   ROOTFS_EXT4_MB=<int>       ext4 size in MB (default du(rootfs)+400)
@@ -123,6 +125,36 @@ fi
 BUILDER_ARG=()
 [ -n "${BUILDX_BUILDER:-}" ] && BUILDER_ARG=(--builder "${BUILDX_BUILDER}")
 
+CHROMIUM_ARGS=()
+if [ "${DESKTOP}" = "1" ] && [ "${ARCH}" = "arm64" ]; then
+    if [ -n "${OPENTINA_CHROMIUM_DEB_URL+x}" ]; then
+        if [ -n "${OPENTINA_CHROMIUM_DEB_URL}" ]; then
+            _chromium_sha="${OPENTINA_CHROMIUM_DEB_SHA256:-}"
+            case "${#_chromium_sha}:${_chromium_sha}" in
+                64:*[!0-9a-fA-F]*)
+                    echo "OPENTINA_CHROMIUM_DEB_SHA256 (64-char hex SHA-256) is required when OPENTINA_CHROMIUM_DEB_URL is set" >&2
+                    exit 1 ;;
+                64:*) ;;
+                *)
+                    echo "OPENTINA_CHROMIUM_DEB_SHA256 (64-char hex SHA-256) is required when OPENTINA_CHROMIUM_DEB_URL is set" >&2
+                    exit 1 ;;
+            esac
+            CHROMIUM_ARGS=(
+                --build-arg "CHROMIUM_DEB_URL=${OPENTINA_CHROMIUM_DEB_URL}"
+                --build-arg "CHROMIUM_DEB_SHA256=${OPENTINA_CHROMIUM_DEB_SHA256}"
+            )
+        else
+            CHROMIUM_ARGS=(
+                --build-arg "CHROMIUM_DEB_URL="
+                --build-arg "CHROMIUM_DEB_SHA256="
+            )
+        fi
+    elif [ -n "${OPENTINA_CHROMIUM_DEB_SHA256+x}" ]; then
+        echo "OPENTINA_CHROMIUM_DEB_URL is required when OPENTINA_CHROMIUM_DEB_SHA256 is set" >&2
+        exit 1
+    fi
+fi
+
 echo "==> buildx build --platform=${PLATFORM} -f docker/Dockerfile.rootfs (SUITE=${SUITE}, PROFILE=${PROFILE_TAG})"
 docker buildx build "${BUILDER_ARG[@]}" \
     --platform "${PLATFORM}" \
@@ -138,6 +170,7 @@ docker buildx build "${BUILDER_ARG[@]}" \
     --build-arg "SERIAL_TTY=${OPENTINA_SERIAL_TTY:-ttyS0}" \
     --build-arg "HOSTNAME=${ROOTFS_HOSTNAME}" \
     --build-arg "DESKTOP=${DESKTOP}" \
+    "${CHROMIUM_ARGS[@]}" \
     -o "type=tar,dest=${RAW_TAR}" \
     "${UBUNTU_DIR}"
 
